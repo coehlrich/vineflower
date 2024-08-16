@@ -10,6 +10,8 @@ import org.jetbrains.java.decompiler.main.extern.IFernflowerLogger;
 import org.jetbrains.java.decompiler.modules.decompiler.decompose.GenericDominatorEngine;
 import org.jetbrains.java.decompiler.modules.decompiler.decompose.IGraph;
 import org.jetbrains.java.decompiler.modules.decompiler.decompose.IGraphNode;
+import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.consts.PrimitiveConstant;
 import org.jetbrains.java.decompiler.util.InterpreterUtil;
 
 import java.util.*;
@@ -394,7 +396,7 @@ public final class ExceptionDeobfuscator {
     return false;
   }
 
-  public static void insertDummyExceptionHandlerBlocks(ControlFlowGraph graph, BytecodeVersion bytecode_version) {
+  public static void insertDummyExceptionHandlerBlocks(ControlFlowGraph graph, BytecodeVersion bytecode_version, StructClass cl) {
     Map<BasicBlock, Set<ExceptionRangeCFG>> mapRanges = new HashMap<>();
     for (ExceptionRangeCFG range : graph.getExceptions()) {
       mapRanges.computeIfAbsent(range.getHandler(), k -> new HashSet<>()).add(range);
@@ -407,6 +409,17 @@ public final class ExceptionDeobfuscator {
       if (ranges.size() == 1) {
         continue;
       }
+
+//      InstructionSequence instructions = handler.getSeq();
+//      if (instructions.length() == 8) {
+//        Instruction instruction = instructions.getInstr(1);
+//        if (instruction.opcode == CodeConstants.opc_new && instruction.operandsCount() == 1) {
+//          PrimitiveConstant constant = cl.getPool().getPrimitiveConstant(instruction.operand(0));
+//          if (constant.value.equals("java/lang/MatchException")) {
+//            continue;
+//          }
+//        }
+//      }
 
       for (ExceptionRangeCFG range : ranges) {
 

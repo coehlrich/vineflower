@@ -147,7 +147,7 @@ public class MethodProcessor implements Runnable {
       }
 
       DotExporter.toDotFile(graph, mt, "cfgMultipleExceptionEntry", true);
-      ExceptionDeobfuscator.insertDummyExceptionHandlerBlocks(graph, mt.getBytecodeVersion());
+      ExceptionDeobfuscator.insertDummyExceptionHandlerBlocks(graph, mt.getBytecodeVersion(), cl);
       DotExporter.toDotFile(graph, mt, "cfgMultipleExceptionDummyHandlers", true);
     }
 

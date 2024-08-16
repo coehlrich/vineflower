@@ -4,6 +4,7 @@ import org.jetbrains.java.decompiler.code.CodeConstants;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.collectors.CounterContainer;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
+import org.jetbrains.java.decompiler.modules.decompiler.IfPatternMatchProcessor.Position;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
@@ -159,31 +160,42 @@ public final class SwitchPatternMatchProcessor {
           oldStat.replaceWith(caseStat);
         }
       }
-      // make instanceof from assignment
-      BasicBlockStatement caseStatBlock = caseStat.getBasichead();
-      if (caseStatBlock.getExprents().size() >= 1) {
-        Exprent expr = caseStatBlock.getExprents().get(0);
-        if (expr instanceof AssignmentExprent) {
-          AssignmentExprent assign = (AssignmentExprent) expr;
 
-          if (assign.getLeft() instanceof VarExprent) {
-            VarExprent var = (VarExprent) assign.getLeft();
+      Exprent guard = stat.getCaseGuards().get(i);
+      if (guard instanceof FunctionExprent func
+          && func.getFuncType() == FunctionType.INSTANCEOF
+          && func.getLstOperands().size() > 2
+          && func.getLstOperands().get(2) instanceof RecordPatternExprent) {
+        stat.getCaseGuards().set(i, null);
+        allCases.set(0, func);
+      } else {
+        // make instanceof from assignment
+        BasicBlockStatement caseStatBlock = caseStat.getBasichead();
+        if (caseStatBlock.getExprents().size() >= 1) {
+          Exprent expr = caseStatBlock.getExprents().get(0);
+          if (expr instanceof AssignmentExprent) {
+            AssignmentExprent assign = (AssignmentExprent) expr;
 
-            if (assign.getRight() instanceof FunctionExprent && ((FunctionExprent) assign.getRight()).getFuncType() == FunctionExprent.FunctionType.CAST) {
-              FunctionExprent cast = (FunctionExprent) assign.getRight();
+            if (assign.getLeft() instanceof VarExprent) {
+              VarExprent var = (VarExprent) assign.getLeft();
 
-              List<Exprent> operands = new ArrayList<>();
-              operands.add(cast.getLstOperands().get(0)); // checking var
-              operands.add(cast.getLstOperands().get(1)); // type
-              operands.add(var); // pattern match var
+              if (assign.getRight() instanceof FunctionExprent && ((FunctionExprent) assign.getRight()).getFuncType() == FunctionExprent.FunctionType.CAST) {
+                FunctionExprent cast = (FunctionExprent) assign.getRight();
 
-              FunctionExprent func = new FunctionExprent(FunctionExprent.FunctionType.INSTANCEOF, operands, null);
+                List<Exprent> operands = new ArrayList<>();
+                operands.add(cast.getLstOperands().get(0)); // checking var
+                operands.add(cast.getLstOperands().get(1)); // type
+                operands.add(var); // pattern match var
 
-              caseStatBlock.getExprents().remove(0);
+                FunctionExprent func = new FunctionExprent(FunctionExprent.FunctionType.INSTANCEOF, operands, null);
 
-              // TODO: ssau representation
-              // any shared nulls will be at the end, and patterns & defaults can't be shared, so its safe to overwrite whatever's here
-              allCases.set(0, func);
+                caseStatBlock.getExprents().remove(0);
+
+                // TODO: ssau representation
+                // any shared nulls will be at the end, and patterns & defaults can't be shared,
+                // so its safe to overwrite whatever's here
+                allCases.set(0, func);
+              }
             }
           }
         }
@@ -345,6 +357,68 @@ public final class SwitchPatternMatchProcessor {
     // alternatively, it can be inverted as `if (guardCond) { /* regular case code... */ break; } idx = __thisIdx + 1;`
     if (reference.b instanceof AssignmentExprent) {
       Statement assignStat = reference.a;
+      if (assignStat.getParent() instanceof SequenceStatement seq
+          && seq.getStats().size() >= 1) {
+        Statement first = seq.getStats().get(0);
+        if (first instanceof BasicBlockStatement block
+            && block.getExprents().size() >= 1
+            && block.getExprents().get(0) instanceof AssignmentExprent assignment
+            && assignment.getRight() instanceof FunctionExprent cast
+            && cast.getFuncType() == FunctionType.CAST
+            && cast.getLstOperands().get(0) instanceof VarExprent source
+            && cast.getLstOperands().get(1) instanceof ConstExprent type
+            && assignment.getLeft() instanceof VarExprent variable) {
+          block.getExprents().remove(0);
+          List<Runnable> onFinish = new ArrayList<>();
+          List<Runnable> undo = new ArrayList<>();
+          Pair<Exprent, Position> pair = IfPatternMatchProcessor.findRecordPatternMatching(variable, seq, 0, type, onFinish, undo, stat.getParent());
+          if (simulate) {
+            block.getExprents().add(0, assignment);
+            for (Runnable run : undo) {
+              run.run();
+            }
+          }
+          for (int i = 0; i < stat.getCaseStatements().size(); i++) {
+            if (stat.getCaseStatements().get(i).containsStatement(reference.a)) {
+              if (simulate) {
+                return pair != null;
+              } else if (pair != null) {
+                for (Runnable runnable : onFinish) {
+                  runnable.run();
+                }
+                SequenceStatement resultSeq = pair.b.currentSeq();
+                int start = pair.b.i();
+                if (start > 0) {
+                  for (StatEdge pred : resultSeq.getStats().get(0).getAllPredecessorEdges()) {
+                    pred.remove();
+                  }
+                  if (start > 1) {
+                    for (StatEdge successor : resultSeq.getStats().get(start - 1).getAllSuccessorEdges()) {
+                      successor.remove();
+                    }
+                  }
+                  for (int j = 0; j < pair.b.i(); j++) {
+                    resultSeq.getStats().remove(0);
+                  }
+                  resultSeq.setFirst(resultSeq.getStats().get(0));
+                }
+                if (pair.b.currentSeq() != seq) {
+                  stat.replaceStatement(seq, resultSeq);
+                }
+
+                List<Exprent> operands = new ArrayList<>();
+                operands.add(source); // checking var
+                operands.add(type); // type
+                operands.add(pair.a); // pattern match var
+
+                FunctionExprent func = new FunctionExprent(FunctionExprent.FunctionType.INSTANCEOF, operands, null);
+                guards.put(stat.getCaseValues().get(i), func);
+                return true;
+              }
+            }
+          }
+        }
+      }
       // Note: This can probably be checked earlier
       if (assignStat.getAllPredecessorEdges().size() > 1) {
         return false;

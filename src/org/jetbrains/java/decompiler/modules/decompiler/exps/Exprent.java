@@ -46,6 +46,7 @@ public abstract class Exprent implements IMatchable {
     SWITCH_HEAD,
     VAR,
     YIELD,
+    RECORD_PATTERN,
 
     // Catch all for plugins
     OTHER

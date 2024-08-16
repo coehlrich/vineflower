@@ -39,7 +39,7 @@ import java.util.BitSet;
 import java.util.List;
 import java.util.stream.Collectors;
 
-public class VarExprent extends Exprent {
+public class VarExprent extends Exprent implements PatternExprent {
   public static final int STACK_BASE = 10000;
   public static final String VAR_NAMELESS_ENCLOSURE = "<VAR_NAMELESS_ENCLOSURE>";
   private static final boolean FORCE_VARVER_NAME = false; // Debug only!
@@ -544,5 +544,15 @@ public class VarExprent extends Exprent {
     }
 
     return true;
+  }
+
+  @Override
+  public List<PatternExprent> getChildExprents() {
+    return List.of();
+  }
+
+  @Override
+  public List<VarExprent> getAllVarExprents() {
+    return List.of(this);
   }
 }

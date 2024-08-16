@@ -1,19 +1,14 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
-import org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.ConstExprent;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.*;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
-import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
-import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.util.Pair;
 
 import java.util.*;
+import java.util.function.Predicate;
 
 public final class IfPatternMatchProcessor {
   public static boolean matchInstanceof(RootStatement root) {
@@ -190,7 +185,153 @@ public final class IfPatternMatchProcessor {
       }
     }
 
+    List<Runnable> onFinish = new ArrayList<>();
+    Pair<Exprent, Position> recordPatternResult = findRecordPatternMatching((VarExprent) left, branch, 0, (ConstExprent) target, onFinish, new ArrayList<>(), null);
+    if (recordPatternResult != null) {
+      for (Runnable runnable : onFinish) {
+        runnable.run();
+      }
+      SequenceStatement seq = recordPatternResult.b.currentSeq;
+      int start = recordPatternResult.b.i;
+      if (start > 0) {
+        for (StatEdge pred : seq.getStats().get(0).getAllPredecessorEdges()) {
+          pred.remove();
+        }
+        if (start > 1) {
+          for (StatEdge successor : seq.getStats().get(start - 1).getAllSuccessorEdges()) {
+            successor.remove();
+          }
+        }
+        for (int i = 0; i < recordPatternResult.b.i; i++) {
+          seq.getStats().remove(0);
+        }
+        seq.setFirst(seq.getStats().get(0));
+      }
+      if (recordPatternResult.b.currentSeq != branch) {
+        statement.replaceStatement(branch, seq);
+      }
+      iof.getLstOperands().set(2, recordPatternResult.a);
+    }
     return true;
+  }
+
+  public static record Position(SequenceStatement currentSeq, int i) {
+  }
+
+  private static enum PatternType {
+    REGULAR,
+    RECORD;
+  }
+
+  private static record Pattern(PatternType type, VarExprent variable, ConstExprent constExprent) {
+  }
+
+  public static Pair<Exprent, Position> findRecordPatternMatching(VarExprent varExprent, Statement stat, int start, ConstExprent type, List<Runnable> onFinish, List<Runnable> undo, Statement removeFromCatch) {
+    Statement catchStatement = null;
+    if (stat instanceof SequenceStatement seq) {
+      List<Pattern> read = new ArrayList<>();
+      while (seq.getStats().size() >= start + 3) {
+        Statement first = seq.getStats().get(start);
+        Statement second = seq.getStats().get(start + 1);
+        Statement third = seq.getStats().get(start + 2);
+        if (first instanceof BasicBlockStatement blockStat && blockStat.getExprents().size() == 1
+            && second instanceof CatchStatement catchStat && catchStat.getStats().size() == 2 && catchStat.getFirst().getExprents().size() == 1
+            && third.getBasichead() != null) {
+          Exprent assign = blockStat.getExprents().get(0);
+          if (assign instanceof AssignmentExprent assignment
+              && assignment.getRight() instanceof VarExprent assigned
+              && varExprent.getVarVersionPair().equals(assigned.getVarVersionPair())
+              && assignment.getLeft() instanceof VarExprent instance) {
+            if (catchStat.getStats().get(0) instanceof BasicBlockStatement callStat
+                && callStat.getExprents().size() == 1
+                && callStat.getExprents().get(0) instanceof AssignmentExprent callAssignment
+                && callAssignment.getRight() instanceof InvocationExprent invocation
+                && invocation.getInstance() instanceof VarExprent testInstance
+                && instance.getVarVersionPair().equals(testInstance.getVarVersionPair())
+                && callAssignment.getLeft() instanceof VarExprent tmpResult) {
+              BasicBlockStatement thirdHead = third.getBasichead();
+              if (thirdHead.getExprents().size() >= 1
+                  && thirdHead.getExprents().get(0) instanceof AssignmentExprent resultAssign
+                  && resultAssign.getRight() instanceof VarExprent resultAssigned
+                  && tmpResult.getVarVersionPair().equals(resultAssigned.getVarVersionPair())
+                  && resultAssign.getLeft() instanceof VarExprent result) {
+                catchStatement = catchStat.getStats().get(1).getFirstSuccessor().getDestination();
+                onFinish.add(() -> {
+                  Statement matchException = null;
+                  for (StatEdge successor : catchStat.getStats().get(1).getAllSuccessorEdges()) {
+                    matchException = successor.getDestination();
+                    successor.remove();
+                  }
+                  if (matchException.getAllPredecessorEdges().isEmpty()) {
+                    matchException.getParent().getStats().removeWithKey(matchException.id);
+                  }
+                });
+                if (third instanceof IfStatement checkStat
+                    && checkStat.getIfstat() instanceof SequenceStatement continued
+                    && checkStat.getHeadexprent().getCondition() instanceof FunctionExprent func
+                    && func.getFuncType() == FunctionType.INSTANCEOF
+                    && func.getLstOperands().get(0) instanceof VarExprent testCast
+                    && result.getVarVersionPair().equals(testCast.getVarVersionPair())
+                    && func.getLstOperands().get(1) instanceof ConstExprent constExprent) {
+                  read.add(new Pattern(PatternType.RECORD, result, constExprent));
+                  seq = continued;
+                  start = 0;
+                } else {
+                  thirdHead.getExprents().remove(0);
+                  undo.add(() -> thirdHead.getExprents().add(0, resultAssign));
+                  start += 2;
+                  result = (VarExprent) result.copy();
+                  result.setDefinition(true);
+                  read.add(new Pattern(PatternType.REGULAR, result, null));
+                }
+              } else {
+                break;
+              }
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+      List<Exprent> recordFields = new ArrayList<>();
+      for (Pattern pattern : read) {
+        recordFields.add(switch (pattern.type) {
+        case REGULAR -> pattern.variable;
+        case RECORD -> {
+          Pair<Exprent, Position> pair = findRecordPatternMatching(pattern.variable, seq, start, pattern.constExprent, onFinish, undo, null);
+          if (pair != null) {
+            seq = pair.b.currentSeq;
+            start = pair.b.i;
+            yield pair.a;
+          } else {
+            yield null;
+          }
+        }
+        });
+      }
+      if (recordFields.stream().allMatch(exp -> exp != null)) {
+        if (catchStatement != null && removeFromCatch != null) {
+          Statement finalCatch = catchStatement;
+          onFinish.add(() -> {
+            for (StatEdge pred : finalCatch.getAllPredecessorEdges()) {
+              if (pred.getSource() == removeFromCatch) {
+                pred.remove();
+                break;
+              }
+            }
+            if (finalCatch.getAllPredecessorEdges().isEmpty()) {
+              finalCatch.getParent().getStats().removeWithKey(finalCatch.id);
+            }
+          });
+        }
+        return Pair.of(new RecordPatternExprent(type, recordFields, null), new Position(seq, start));
+      }
+    }
+    return null;
   }
 
   // Finds all assignments and their associated variables in a statement's predecessors.
