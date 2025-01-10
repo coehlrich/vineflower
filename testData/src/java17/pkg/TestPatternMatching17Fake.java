@@ -1,5 +1,8 @@
 package pkg;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class TestPatternMatching17Fake {
     public void test1(Object obj) {
         if (obj instanceof Integer) {
@@ -57,6 +60,13 @@ public class TestPatternMatching17Fake {
 
     if (i != null) {
       System.out.println(i);
+    }
+  }
+
+  public void test4(List<?> l) {
+    if (l instanceof ArrayList<?>) {
+      ArrayList<Object> al = (ArrayList<Object>) l;
+      System.out.println(al);
     }
   }
 }

@@ -18,6 +18,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.VarProcessor;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarTypeProcessor.FinalType;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute;
 import org.jetbrains.java.decompiler.struct.attr.StructLocalVariableTableAttribute.LocalVariable;
@@ -223,6 +224,11 @@ public class VarExprent extends Exprent implements Pattern {
   }
 
   public VarType getDefinitionVarType() {
+    MethodWrapper method = (MethodWrapper) DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
+    return getDefinitionVarType(method == null ? null : method.methodStruct);
+  }
+
+  public VarType getDefinitionVarType(StructMethod method) {
     if (DecompilerContext.getOption(IFernflowerPreferences.USE_DEBUG_VAR_NAMES)) {
 
       if (lvt != null) {
@@ -237,7 +243,6 @@ public class VarExprent extends Exprent implements Pattern {
         return getVarType();
       }
 
-      MethodWrapper method = (MethodWrapper)DecompilerContext.getContextProperty(DecompilerContext.CURRENT_METHOD_WRAPPER);
       if (method != null) {
         Integer originalIndex = null;
         if (processor != null) {
@@ -247,8 +252,7 @@ public class VarExprent extends Exprent implements Pattern {
         if (originalIndex != null) {
           // first try from signature
           if (DecompilerContext.getOption(IFernflowerPreferences.DECOMPILE_GENERIC_SIGNATURES)) {
-            StructLocalVariableTypeTableAttribute attr =
-              method.methodStruct.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TYPE_TABLE);
+            StructLocalVariableTypeTableAttribute attr = method.getAttribute(StructGeneralAttribute.ATTRIBUTE_LOCAL_VARIABLE_TYPE_TABLE);
             if (attr != null) {
               String signature = attr.getSignature(originalIndex, visibleOffset);
               if (signature != null) {
@@ -261,7 +265,7 @@ public class VarExprent extends Exprent implements Pattern {
           }
 
           // then try from descriptor
-          StructLocalVariableTableAttribute attr = method.methodStruct.getLocalVariableAttr();
+          StructLocalVariableTableAttribute attr = method.getLocalVariableAttr();
           if (attr != null) {
             String descriptor = attr.getDescriptor(originalIndex, visibleOffset);
             if (descriptor != null) {

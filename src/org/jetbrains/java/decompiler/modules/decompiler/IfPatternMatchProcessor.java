@@ -8,6 +8,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
 import org.jetbrains.java.decompiler.struct.StructRecordComponent;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.struct.gen.generics.GenericType;
 
 import java.util.*;
 
@@ -127,7 +128,7 @@ public final class IfPatternMatchProcessor {
     Exprent left = first.getAllExprents().get(0);
     Exprent right = first.getAllExprents().get(1);
 
-    boolean result = findPatternMatchingInstanceof(left, right, source, target, branch, iof, head);
+    boolean result = findPatternMatchingInstanceof(left, right, source, target, branch, iof, head, statement.getBasichead(), root);
 
     if (head.getExprents() != null && !head.getExprents().isEmpty() && head.getExprents().get(0) instanceof AssignmentExprent assignment) {
       // If it's an assignement, get both sides
@@ -162,7 +163,7 @@ public final class IfPatternMatchProcessor {
     return result;
   }
 
-  private static boolean findPatternMatchingInstanceof(Exprent left, Exprent right, Exprent source, Exprent target, Statement branch, FunctionExprent iof, Statement head) {
+  private static boolean findPatternMatchingInstanceof(Exprent left, Exprent right, Exprent source, Exprent target, Statement branch, FunctionExprent iof, Statement head, BasicBlockStatement before, RootStatement root) {
     if (!(right instanceof FunctionExprent function) || function.getFuncType() != FunctionType.CAST) {
       return false;
     }
@@ -196,12 +197,68 @@ public final class IfPatternMatchProcessor {
     }
     
     VarType storeType = left.getInferredExprType(null);
+    VarType originalType = source.getInferredExprType(null);
+    if (source instanceof VarExprent varE) {
+      originalType = varE.getDefinitionVarType(root.mt);
+      if (!originalType.isGeneric() && before != null && before.getExprents().size() >= 1) {
+        Exprent last = before.getExprents().get(before.getExprents().size() - 1);
+        if (last instanceof AssignmentExprent assignment && assignment.getLeft() instanceof VarExprent tmp && tmp.getVarVersionPair().equals(varE.getVarVersionPair())) {
+          originalType = assignment.getRight().getInferredExprType(null);
+        }
+      }
+    }
 
+    if (!isValid(storeType, originalType)) {
+      return false;
+    }
     // Add the exprent to the instanceof exprent and remove it from the inside of the if statement
     iof.getLstOperands().add(2, left);
     head.getExprents().remove(0);
     if (storeType.isGeneric()) {
       iof.getLstOperands().set(1, new ConstExprent(storeType, null, iof.getLstOperands().get(1).bytecode));
+    }
+    return true;
+  }
+
+  private static boolean isValid(VarType subType, VarType superType) {
+    // JLS 5.1.6.2
+    // A narrowing reference conversion from a type S to a parameterized class or interface type T is unchecked, unless at least one of the following is true:
+    if (subType.isGeneric()) {
+      GenericType genericSubType = (GenericType) subType;
+      // All of the type arguments of T are unbounded wildcards.
+      if (genericSubType.getArguments().stream().allMatch(type -> type == null)) {
+        return true;
+      }
+      
+      if (!superType.isGeneric()) {
+        return false;
+      }
+      
+      // T <: S, and S has no subtype X other than T where the type arguments of X are not contained in the type arguments of T.
+      
+      // T <: S
+      if (!DecompilerContext.getStructContext().instanceOf(subType.value, superType.value)) {
+        return false;
+      }
+
+      // for type arguments specified in S convert S to T then check if S is a super type of T
+      VarType convertedSubType = GenericType.getGenericSuperType(subType, superType);
+      if (!GenericType.areArgumentsAssignable(superType, convertedSubType, new HashMap<>())) {
+        return false;
+      }
+      
+      // type arguments specified in T and not S are required to be unbounded wildcards
+      StructClass subClass = DecompilerContext.getStructContext().getClass(subType.value);
+      Map<String, Map<VarType, VarType>> generics = subClass.getAllGenerics();
+      GenericType superTypeSignature = (GenericType) DecompilerContext.getStructContext().getClass(superType.value).getSignature().genericType.remap(generics.get(superType.value));
+      List<GenericType> superTypeTypeParameters = superTypeSignature.getAllGenericVars();
+      Map<VarType, VarType> subTypeTypeParameters = new HashMap<>();
+      subClass.getSignature().genericType.mapGenVarsTo(genericSubType, subTypeTypeParameters);
+      for (Map.Entry<VarType, VarType> entry : subTypeTypeParameters.entrySet()) {
+        if (!superTypeTypeParameters.contains(entry.getKey()) && entry.getValue() != null) {
+          return false;
+        }
+      }
     }
     return true;
   }
