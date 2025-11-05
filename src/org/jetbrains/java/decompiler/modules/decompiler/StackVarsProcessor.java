@@ -408,8 +408,7 @@ public class StackVarsProcessor {
     int useflags = right.getExprentUse();
 
     // stack variables only
-    if ((!left.isStack() && !options.inlineRegularVars) &&
-        (!(right instanceof VarExprent) || ((VarExprent)right).isStack())) { // special case catch(... ex)
+    if ((!left.isStack() && !options.inlineRegularVars)) {
       setRet(ret, -1, changed);
       return;
     }

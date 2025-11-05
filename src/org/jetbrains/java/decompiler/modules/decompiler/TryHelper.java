@@ -1,6 +1,8 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
+import org.jetbrains.java.decompiler.modules.decompiler.exps.AssignmentExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.VarExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.*;
 import org.jetbrains.java.decompiler.struct.StructClass;
 
@@ -9,6 +11,7 @@ import java.util.List;
 
 public class TryHelper {
   public static boolean enhanceTryStats(RootStatement root, StructClass cl) {
+    boolean tryVariables = fixTryVariables(root);
     boolean ret = makeTryWithResourceRec(cl, root);
 
     if (ret) {
@@ -29,7 +32,35 @@ public class TryHelper {
       }
     }
 
-    return ret;
+    return ret || tryVariables;
+  }
+
+  private static boolean fixTryVariables(Statement stat) {
+    boolean fixed = false;
+    if (stat instanceof CatchStatement catchStat) {
+      List<VarExprent> variables = catchStat.getVars();
+      for (int i = 0; i < variables.size(); i++) {
+        if (catchStat.getStats().size() > i + 1) {
+          VarExprent variable = variables.get(i);
+          Statement exceptionStat = catchStat.getStats().get(i + 1);
+          BasicBlockStatement head = exceptionStat.getBasichead();
+          if (head.getExprents().size() >= 1
+              && head.getExprents().get(0) instanceof AssignmentExprent assignment
+              && assignment.getLeft() instanceof VarExprent exception
+              && assignment.getRight() instanceof VarExprent temp
+              && variable.getVarVersionPair().equals(temp.getVarVersionPair())
+              && !temp.isVarReferenced(exceptionStat, temp)) {
+            variables.set(i, exception);
+            head.getExprents().remove(0);
+            fixed = true;
+          }
+        }
+      }
+    }
+    for (Statement subStat : stat.getStats()) {
+      fixed |= fixTryVariables(subStat);
+    }
+    return fixed;
   }
 
   private static boolean makeTryWithResourceRec(StructClass cl, Statement stat) {
