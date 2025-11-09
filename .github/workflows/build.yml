@@ -26,6 +26,13 @@ jobs:
             build/reports/
             plugins/*/build/reports/
             build/test-results/**/*.xml
+      - name: Upload TestSwitchPatternMatching13
+        if: "${{ always() }}"
+        uses: actions/upload-artifact@v4
+        with:
+          name: "test-switch-jdk${{ matrix.java }}"
+          path: |
+            testData/classes/java17preview/pkg/TestSwitchPatternMatching13.class
   publish-test-results:
     runs-on: ubuntu-24.04
     needs: [build]
