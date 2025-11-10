@@ -314,6 +314,10 @@ public final class TryWithResourcesProcessor {
   }
 
   private static void removeClose(Statement statement, boolean nullable) {
+    Statement before = null;
+    if (!statement.getAllPredecessorEdges().isEmpty()) {
+      before = statement.getAllPredecessorEdges().get(0).getSource();
+    }
     if (nullable) {
       // Breaking out of parent, remove label
       // TODO: The underlying problem is that empty labeled basic blocks remove their label but the edge is marked as labeled and explicit.
@@ -324,7 +328,7 @@ public final class TryWithResourcesProcessor {
       //
       List<StatEdge> edges = statement.getAllSuccessorEdges();
       if (!edges.isEmpty() && edges.get(0).closure == statement.getParent()) {
-        SequenceHelper.destroyAndFlattenStatement(statement);
+        statement = SequenceHelper.destroyAndFlattenStatement(statement);
       } else {
         for (StatEdge edge : statement.getFirst().getAllSuccessorEdges()) {
           edge.getDestination().removePredecessor(edge);
@@ -339,10 +343,31 @@ public final class TryWithResourcesProcessor {
         }
 
         // Keep the label as it's not the parent
-        statement.replaceWithEmpty();
+        statement = statement.replaceWithEmpty();
+      }
+      edges = statement.getAllSuccessorEdges();
+      if (!edges.isEmpty()) {
+        statement = edges.get(0).getDestination();
       }
     } else {
       statement.getExprents().remove(0);
+    }
+    // Check for synthetic variable for returning from a try with resources
+    if (before != null
+        && before instanceof BasicBlockStatement beforeBasicBlock
+        && beforeBasicBlock.getExprents().size() > 0
+        && beforeBasicBlock.getExprents().get(beforeBasicBlock.getExprents().size() - 1) instanceof AssignmentExprent assignment
+        && assignment.getLeft() instanceof VarExprent assigned
+        && statement instanceof BasicBlockStatement postBasicBlock
+        && postBasicBlock.getExprents().size() > 0
+        && postBasicBlock.getExprents().get(0) instanceof ExitExprent exit
+        && exit.getExitType() == ExitExprent.Type.RETURN
+        && assigned.equalsVersions(exit.getValue())) {
+      ExitExprent newExit = new ExitExprent(ExitExprent.Type.RETURN, assignment.getRight(), exit.getRetType(), exit.bytecode, exit.getMethodDescriptor());
+      beforeBasicBlock.getExprents().set(beforeBasicBlock.getExprents().size() - 1, newExit);
+      if (!((VarExprent) exit.getValue()).isVarReferenced(statement.getTopParent())) {
+        statement.getExprents().remove(0);
+      }
     }
   }
 
