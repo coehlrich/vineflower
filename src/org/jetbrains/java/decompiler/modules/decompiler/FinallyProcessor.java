@@ -89,7 +89,7 @@ public class FinallyProcessor {
           } else {
             if (DecompilerContext.getOption(IFernflowerPreferences.FINALLY_DEINLINE) && this.verifyFinallyEx(graph, fin, inf)) {
               // FIXME: inlines improperly, breaks TestLoopFinally#emptyInnerFinally
-//              inlineReturnVar(graph, handler);
+              inlineReturnVar(graph, handler);
 
               this.finallyBlocks.put(handler, null);
             } else {
@@ -1120,55 +1120,57 @@ public class FinallyProcessor {
       // We only want exits with 1 successor block
       if (exit.getSuccs().size() == 1) {
         Instruction instr = exit.getLastInstruction();
+        if (instr != null) {
 
-        int index = indexOf(instr);
+          int index = indexOf(instr);
 
-        if (index >= 0) {
+          if (index >= 0) {
 
-          // Traverse up predecessors for old stores
+            // Traverse up predecessors for old stores
 
-          Deque<BasicBlock> stack = new LinkedList<>(exit.getPreds());
-          Set<BasicBlock> visited = new HashSet<>();
+            Deque<BasicBlock> stack = new LinkedList<>(exit.getPreds());
+            Set<BasicBlock> visited = new HashSet<>();
 
-          while (!stack.isEmpty()) {
-            BasicBlock pred = stack.pop();
+            while (!stack.isEmpty()) {
+              BasicBlock pred = stack.pop();
 
-            // Somehow found the handler from predecessor traversal- stop
-            if (pred == handler) {
-              continue mainloop;
-            }
+              // Somehow found the handler from predecessor traversal- stop
+              if (pred == handler) {
+                continue mainloop;
+              }
 
-            // Go through all instructions of predecessor
-            for (Instruction predInstr : pred.getSeq()) {
-              if (predInstr.opcode == STORE_CODES[index]) {
-                // Found an earlier store to the same variable, we cannot inline this
-                if (predInstr.operand(0) == instr.operand(0)) {
-                  continue mainloop;
+              // Go through all instructions of predecessor
+              for (Instruction predInstr : pred.getSeq()) {
+                if (predInstr.opcode == STORE_CODES[index]) {
+                  // Found an earlier store to the same variable, we cannot inline this
+                  if (predInstr.operand(0) == instr.operand(0)) {
+                    continue mainloop;
+                  }
+                }
+              }
+
+              // Find preds until we reach the start block
+              for (BasicBlock p : pred.getPreds()) {
+                if (visited.add(p)) {
+                  stack.push(p);
                 }
               }
             }
 
-            // Find preds until we reach the start block
-            for (BasicBlock p : pred.getPreds()) {
-              if (visited.add(p)) {
-                stack.push(p);
-              }
-            }
-          }
+            InstructionSequence nextSeq = exit.getSuccs().get(0).getSeq();
+            if (nextSeq.length() == 2) {
+              // Check if next block's sequence is load and return
+              if (nextSeq.getInstr(0).opcode == NEXT_CODES[index][0] && nextSeq.getInstr(1).opcode == NEXT_CODES[index][1]) {
+                // Make sure variable index is correct
+                if (instr.operand(0) == nextSeq.getInstr(0).operand(0)) {
+                  // remove store
+                  exit.getSeq().removeLast();
+                  // add return
+                  exit.getSeq().addInstruction(nextSeq.getInstr(1));
 
-          InstructionSequence nextSeq = exit.getSuccs().get(0).getSeq();
-          if (nextSeq.length() == 2) {
-            // Check if next block's sequence is load and return
-            if (nextSeq.getInstr(0).opcode == NEXT_CODES[index][0] && nextSeq.getInstr(1).opcode == NEXT_CODES[index][1]) {
-              // Make sure variable index is correct
-              if (instr.operand(0) == nextSeq.getInstr(0).operand(0)) {
-                // remove store
-                exit.getSeq().removeLast();
-                // add return
-                exit.getSeq().addInstruction(nextSeq.getInstr(1));
-
-                // Clear next exception range, mergeBasicBlocks will take care of it
-                nextSeq.clear();
+                  // Clear next exception range, mergeBasicBlocks will take care of it
+                  nextSeq.clear();
+                }
               }
             }
           }
@@ -1181,6 +1183,9 @@ public class FinallyProcessor {
     for (int i = 0; i < STORE_CODES.length; i++) {
       int code = STORE_CODES[i];
 
+      if (instr == null) {
+        System.out.println();
+      }
       if (instr.opcode == code) {
         return i;
       }
